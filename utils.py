@@ -73,7 +73,7 @@ class Augment(nn.Module):
     def forward(self, x):
         N, FC, H, W = x.shape
         F = FC // 3
-        out = torch.empty_like(x,requires_grad=x.requires_grad)
+        out = torch.empty_like(x,requires_grad=x.requires_grad,device=x.device)
         op_name = random.choices(self.op_names, weights=self.weights, k=1)[0]
         print(op_name, "new")
         for n in range(N):
@@ -191,6 +191,7 @@ def save_pretrain_model_checkpoint(args, model, model_name):
     log_dir = Path(args.pretrain_model)
     log_dir.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), log_dir / '{}.pth'.format(model_name))
+
 def save_model_checkpoint(model, config, optimizer, train_pars, epoch, role="global", client_id=None):
     """
     Save model and optimizer state dicts.

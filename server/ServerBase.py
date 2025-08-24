@@ -1,7 +1,7 @@
 import copy
 from typing import List
 
-from utils import batch_psnr
+from utils import batch_psnr,normalize_augment
 from torch import nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -31,7 +31,7 @@ class Server(object):
             for model_name in self.model_names}
         self.distill_data = ServerDataset(distill_data, args.temp_patch_size, args.patch_size,
                                           random_shuffle=True, temp_stride=3)
-        self.distill_loader = DataLoader(self.distill_data, batch_size=1, shuffle=False, num_workers=4)
+        self.distill_loader = DataLoader(self.distill_data, batch_size=self.args.batch_size, shuffle=False, num_workers=4)
         # 其他
         self.device = device
         self.mode = mode
@@ -48,13 +48,14 @@ class Server(object):
 
     def create_clients(self):
         model_config = dict(zip(self.args.model_names, self.args.model_counts))
-        for idx in range(self.args.client_numbers):
-            for model_name, count in model_config.items():
-                for _ in range(count):
-                    client = Client(self.args, copy.deepcopy(self.model_dict[model_name]),
-                                    self.client_dataloader[idx],self.local_test_dataloader[idx],
-                                    logger=self.logger,device=self.device,model_name=model_name, idx=idx)
-                    self.clients.append(client)
+        idx = 0
+        for model_name, count in model_config.items():
+            for _ in range(count):
+                client = Client(self.args, copy.deepcopy(self.model_dict[model_name]),
+                                self.client_dataloader[idx],self.local_test_dataloader[idx],
+                                logger=self.logger,device=self.device,model_name=model_name, idx=idx)
+                self.clients.append(client)
+                idx += 1
     def get_pretrain_model(self):
         pretrain_func_map = {"fastdvdnet": pretrain_fastdvdnet}
         for model_name, model in self.model_dict.items():
@@ -68,7 +69,7 @@ class Server(object):
                 model.load_state_dict(pretrain_state_dict, strict=False)
                 # 向client初始化模型
 
-    def aggregate_same_models(self):
+    '''def aggregate_same_models(self):
         def average_weights(w):
             w_avg = copy.deepcopy(w[0])
             for key in w_avg.keys():
@@ -79,61 +80,79 @@ class Server(object):
         for model_name in self.model_names:
             client_weights = [client.model.state_dict() for client in self.clients if client.model_name == model_name]
             self.model_dict[model_name].load_state_dict(average_weights(client_weights))
+            '''
+
+    def aggregate_same_models(self):
+        """Aggregate models with the same architecture across all clients in self.clients."""
+
+        def average_weights(w):
+            w_avg = copy.deepcopy(w[0])
+            for key in w_avg.keys():
+                for i in range(1, len(w)):
+                    w_avg[key] += w[i][key]
+                w_avg[key] = torch.div(w_avg[key], len(w))
+            return w_avg
+
+        for model_name in self.model_names:
+            client_weights = []
+            for client in self.clients:  # ✅ 不需要传参，直接用 self.clients
+                if client.model_name == model_name:
+                    # 确保所有参数搬到 self.device
+                    state_dict = {k: v.to(self.device) for k, v in client.model.state_dict().items()}
+                    client_weights.append(state_dict)
+            if client_weights:
+                self.model_dict[model_name].load_state_dict(average_weights(client_weights))
     def distill(self,epochs =1):
         for model_name in self.model_names:
             model = self.model_dict[model_name]
             optimizer = self.distill_optimizers[model_name]
+            model.to(self.device)
             model.train()
+            criterion = self.distill_criterion.to(self.device)
             epoch_loss = []
             for teacher in self.clients:
                 teacher.model.eval()
             for epoch in range(epochs):
                 batch_loss = []
-                for idx, (seq,) in enumerate(self.distill_loader):
-                    seq = seq.to(self.device)
-                    if seq.dim() == 5 and seq.shape[0] == 1:
-                        seq = seq.squeeze(0)  # [T, C, H, W]
-                    T, _, H, W = seq.size()
-                    stdn = torch.empty((1, 1, 1, 1), device=self.device).uniform_(
+                step_count = 0
+                for batch_idx, (seq,gt) in enumerate(self.distill_loader):
+                    model.train()
+                    optimizer.zero_grad()
+                    img_train, gt_train = normalize_augment(seq, self.ctrl_fr_idx)
+                    img_train = img_train.to(self.device, non_blocking=True)
+                    gt_train = gt_train.to(self.device, non_blocking=True)
+                    N, _, H, W = img_train.size()
+                    stdn = torch.empty((N, 1, 1, 1), device=self.device).uniform_(
                         self.args.noise_level[0], self.args.noise_level[1]
                     )
-                    noise = torch.normal(mean=0.0, std=stdn.expand_as(seq))
-                    noisy_seq = seq + noise
-                    noisy_seq = torch.clamp(noisy_seq, 0.0, 1.0)
-                    # 创建标量张量用于denoise_seq_fastdvdnet
-                    noise_std = stdn.view(-1)
+
+                    noise = torch.normal(mean=0.0, std=stdn.expand_as(img_train))
+                    imgn_train = img_train + noise
+                    imgn_train = torch.clamp(imgn_train, 0.0, 1.0)
+                    noise_map = stdn.expand((N, 1, H, W)).to(self.device)
+                    student_outputs = model(imgn_train, noise_map)
                     soft_target = []
                     if self.mode == "mean output":
                         teacher_outputs = []
                         with torch.no_grad():
                             for teacher in self.clients:
-                                teacher_denoised = denoise_seq_fastdvdnet(
-                                    seq=noisy_seq,
-                                    noise_std=noise_std,
-                                    temporal_window=self.args.temp_psz,
-                                    model=teacher.model
-                                )
+                                teacher_denoised = teacher.model(imgn_train, noise_map)
                                 teacher_outputs.append(teacher_denoised)
                         if teacher_outputs:
                             soft_target = torch.stack(teacher_outputs).mean(dim=0)
                         else:
                             continue
-                    optimizer.zero_grad()
-                    student_denoised = denoise_seq_fastdvdnet(
-                        seq=noisy_seq,
-                        noise_std=noise_std ,
-                        temporal_window=self.args.temp_psz,
-                        model=model)
-                    loss = self.distill_criterion(student_denoised, soft_target)
+
+                    loss = criterion(student_outputs, soft_target)
                     aux_loss_weight = 0.2
-                    aux_loss = nn.MSELoss()(student_denoised, seq)
+                    aux_loss = nn.MSELoss()(student_outputs, gt_train)
                     total_loss_batch = (1 - aux_loss_weight) * loss + aux_loss_weight * aux_loss
-                    N = seq.shape[0] if seq.dim() == 5 else 1
-                    total_loss_batch = total_loss_batch / 2*N
+                    total_loss_batch = total_loss_batch / (N*2)
                     total_loss_batch.backward()
                     optimizer.step()
-                    if idx % 5 ==0:
-                        print(f'Epoch: [{epoch}/{epochs}], Step: [{idx}], loss:[{total_loss_batch}]')
+                    step_count += 1
+                    if step_count % 5 ==0:
+                        print(f'Epoch: [{epoch}/{epochs}], Step: [{step_count}],model:[{model_name}], loss:[{total_loss_batch.item():.6f}]')
                     batch_loss.append(total_loss_batch.item())
                 epoch_loss.append(sum(batch_loss) / len(batch_loss))
     def train(self):
