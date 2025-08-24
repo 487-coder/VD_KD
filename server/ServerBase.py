@@ -22,7 +22,7 @@ class Server(object):
         self.args = args
         # global model
         self.model_names = model_names
-        self.model_dict = {model_name: models.get_model(model_name) for model_name in self.model_names}
+        self.model_dict = {model_name: models.get_model(model_name)() for model_name in self.model_names}
         # global distill datasets
         self.pretrain_data = pretrain_data
         self.distill_criterion = nn.MSELoss()

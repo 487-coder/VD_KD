@@ -51,7 +51,7 @@ def pretrain_fastdvdnet(args,pretrain_data,val_dataset):
 
             N, _, H, W = img_train.size()
             stdn = torch.empty((N, 1, 1, 1), device=device).uniform_(
-                args.noise_ival[0], args.noise_ival[1]
+                args.noise_level[0], args.noise_level[1]
             )
             noise = torch.zeros_like(img_train)
             noise = torch.normal(mean=noise, std=stdn.expand_as(noise))
@@ -72,13 +72,13 @@ def pretrain_fastdvdnet(args,pretrain_data,val_dataset):
         validate_and_log(
             model=model,
             dataset_val=val_dataset,
-            valnoisestd=args.val_noiseL,
+            valnoisestd=args.test_noise,
             temp_psz=args.temp_patch_size,
             writer=writer,
             epoch=epoch,
             lr=current_lr,
         )
-        save_pretrain_model_checkpoint(args,model,model_name = "fastdvdent")
+        save_pretrain_model_checkpoint(args,model,model_name = "fastdvdnet")
     writer.close()
 
 

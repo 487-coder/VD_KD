@@ -107,7 +107,7 @@ class LocalDataset(Dataset):
         # 预加载所有视频帧到内存
         self.videos = []
         for p in self.video_paths:
-            frames = iio.imread(str(p), plugin="pyav")  # [T, H, W, 3], RGB
+            frames = iio.imread(str(p))  # [T, H, W, 3], RGB
             self.videos.append(np.asarray(frames))
 
         self.seq_len = sequence_length
@@ -162,7 +162,7 @@ class TestDataset(Dataset):
         self.data_dir = Path(data_dir)
         self.num_input_frames = num_input_frames
 
-        seq_dirs = sorted(self.data_dir.glob(VALSEQPATT))
+        seq_dirs = sorted(self.data_dir.rglob(VALSEQPATT))
         seq_dirs = [p for p in seq_dirs if p.is_dir() and not p.name.startswith('.')]
         self.sequences = []
         for seq_path in seq_dirs:
