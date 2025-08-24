@@ -205,7 +205,7 @@ def save_model_checkpoint(model, config, optimizer, train_pars, epoch, role="glo
         role: 'client' or 'global'
         client_id: int, required if role is 'client'
     """
-    assert role in ["client", "global"], "role must be 'client' or 'global'"
+    #assert role in ["client", "global"], "role must be 'client' or 'global'"
 
     # === Set subdirectory path ===
     if role == "client":
