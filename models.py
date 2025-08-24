@@ -195,6 +195,9 @@ class FastDVDnet(nn.Module):
         return x
 
 
+
+def get_model(model_name):
+    return {"fastdvdnet":FastDVDnet}[model_name]
 def frame_denoise(model, noise_frame, sigma_map, context):
     _, _, h, w = noise_frame.shape
     pad_h = (4 - h % 4)
@@ -202,9 +205,9 @@ def frame_denoise(model, noise_frame, sigma_map, context):
     if pad_h or pad_w:
         noise_frame = F.pad(noise_frame, (0, pad_w, 0, pad_h), mode="reflect")
         sigma_map = F.pad(sigma_map, (0, pad_w, 0, pad_h), mode="reflect")
-    with context:
-        denoise_frame = model(noise_frame, sigma_map)
-        denoise_frame = torch.clamp(denoise_frame, 0.0, 1.0)
+
+    denoise_frame = model(noise_frame, sigma_map)
+    denoise_frame = torch.clamp(denoise_frame, 0.0, 1.0)
     if pad_h:
         denoise_frame = denoise_frame[:, :, :-pad_h, :]
     if pad_w:

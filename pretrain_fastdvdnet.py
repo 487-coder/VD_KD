@@ -7,9 +7,9 @@ from dataset import ServerDataset
 from dataset import partition_server_data
 from options import args_parser
 import torch.nn as nn
-from utils import normalize_augment,orthogonal_conv_weights,batch_psnr,save_model_checkpoint
+from utils import normalize_augment,orthogonal_conv_weights,batch_psnr,save_pretrain_model_checkpoint
 from torch.utils.tensorboard import SummaryWriter
-def pretrain(args,pretrain_data,val_dataset):
+def pretrain_fastdvdnet(args,pretrain_data,val_dataset):
     pretrain_dataset = ServerDataset(pretrain_data,args.temp_patch_size,args.patch_size,args.max_number_patches,
                                     random_shuffle=True,temp_stride= 3)
     pretrain_loader = DataLoader(pretrain_dataset,batch_size=args.batch_size,shuffle=False,num_workers=4)
@@ -20,6 +20,8 @@ def pretrain(args,pretrain_data,val_dataset):
     torch.backends.cudnn.benchmark = True
     model = FastDVDnet()
     model = nn.DataParallel(model, device_ids=device_ids).cuda()
+    for param in model.parameters():
+        param.requires_grad = True
     criterion = nn.MSELoss(reduction='sum')
     criterion.cuda()
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
@@ -36,8 +38,9 @@ def pretrain(args,pretrain_data,val_dataset):
             param_group["lr"] = current_lr
         enable_orthog = epoch < stop_orthog_epoch
         step_count = 0
+        model.train()
         for i,(seq,gt) in enumerate(pretrain_loader):
-            model.train()
+
             optimizer.zero_grad()
 
             # 数据处理和前向传播（保持原样）
@@ -67,7 +70,7 @@ def pretrain(args,pretrain_data,val_dataset):
                     print(f"Applied orthogonalization at epoch {epoch}, step {step_count}")
         model.eval()
         validate_and_log(
-            model_temp=model,
+            model=model,
             dataset_val=val_dataset,
             valnoisestd=args.val_noiseL,
             temp_psz=args.temp_patch_size,
@@ -75,7 +78,7 @@ def pretrain(args,pretrain_data,val_dataset):
             epoch=epoch,
             lr=current_lr,
         )
-        save_model_checkpoint(args,model,model_name = "fastdvdent")
+        save_pretrain_model_checkpoint(args,model,model_name = "fastdvdent")
     writer.close()
 
 
@@ -86,8 +89,6 @@ def validate_and_log(model, dataset_val, valnoisestd, temp_psz, writer,
     psnr_val = 0
     for seq_val in dataset_val:
         # Add Gaussian noise
-        if seq_val.max() <= 1:
-            valnoisestd = valnoisestd / 255.0
         noise = torch.FloatTensor(seq_val.size()).normal_(mean=0, std=valnoisestd)
         seqn_val = (seq_val + noise).cuda()
         sigma_noise = torch.tensor([valnoisestd], device='cuda')

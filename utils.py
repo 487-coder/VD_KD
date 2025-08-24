@@ -73,7 +73,7 @@ class Augment(nn.Module):
     def forward(self, x):
         N, FC, H, W = x.shape
         F = FC // 3
-        out = torch.empty_like(x)
+        out = torch.empty_like(x,requires_grad=x.requires_grad)
         op_name = random.choices(self.op_names, weights=self.weights, k=1)[0]
         print(op_name, "new")
         for n in range(N):
@@ -187,7 +187,49 @@ def open_sequence(seq_dir, gray_mode, expand_if_needed=False, max_num_fr=100):
     return seq, expanded_h, expanded_w
 
 
-def save_model_checkpoint(args, model, model_name):
+def save_pretrain_model_checkpoint(args, model, model_name):
     log_dir = Path(args.pretrain_model)
     log_dir.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), log_dir / '{}.pth'.format(model_name))
+def save_model_checkpoint(model, config, optimizer, train_pars, epoch, role="global", client_id=None):
+    """
+    Save model and optimizer state dicts.
+
+    Args:
+        model: torch.nn.Module
+        config: dict, contains training configuration including 'log_dir' and 'save_every_epochs'
+        optimizer: torch.optim.Optimizer
+        train_pars: dict, training info like epoch, loss, etc.
+        epoch: int
+        role: 'client' or 'global'
+        client_id: int, required if role is 'client'
+    """
+    assert role in ["client", "global"], "role must be 'client' or 'global'"
+
+    # === Set subdirectory path ===
+    if role == "client":
+        assert client_id is not None, "client_id must be provided when role is 'client'"
+        log_dir = Path(config['log_dir']) / f"client_{client_id}"
+    else:
+        log_dir = Path(config['log_dir']) / "global"
+
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    # === Save model only for inference ===
+    torch.save(model.state_dict(), log_dir / 'net.pth')
+
+    # === Save full checkpoint for resume training ===
+    save_dict = {
+        'state_dict': model.state_dict(),
+        'optimizer': optimizer.state_dict() if optimizer is not None else None,
+        'training_params': train_pars,
+        'args': config
+    }
+
+    torch.save(save_dict, log_dir / 'ckpt.pth')
+
+    if epoch % config['save_every_epochs'] == 0:
+        epoch_ckpt_path = log_dir / f'ckpt_e{epoch + 1}.pth'
+        torch.save(save_dict, epoch_ckpt_path)
+
+    del save_dict
