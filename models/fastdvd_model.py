@@ -244,6 +244,7 @@ def denoise_seq_fastdvdnet(seq, noise_std, model, temporal_window=5, is_training
         del input_tensor
         torch.cuda.empty_cache()
         return denoise_frames
+'''
 def validate_fastdvd_model(model, dataset_val, valnoisestd, temp_psz, device):
     """Run validation and log PSNR + sample images."""
     total_psnr = 0.0
@@ -254,8 +255,12 @@ def validate_fastdvd_model(model, dataset_val, valnoisestd, temp_psz, device):
             if seq.dim() == 5 and seq.shape[0] == 1:
                 seq = seq.squeeze(0)
         # Add Gaussian noise
-            noise = torch.FloatTensor(seq.size()).normal_(mean=0, std=valnoisestd)
-            seqn_val = (seq + noise).to(device)
+            noise = torch.empty_like(seq).normal_(mean=0, std=valnoisestd)
+            noisy_frame = seq + noise
+            seqn_val= torch.clamp(noisy_frame, 0.0, 1.0)
+            #noise = torch.FloatTensor(seq.size()).normal_(mean=0, std=valnoisestd)
+            #seqn_val = (seq + noise).to(device)
+
             sigma_noise = torch.tensor([valnoisestd], device=device)
 
             out_val = denoise_seq_fastdvdnet(
@@ -269,6 +274,37 @@ def validate_fastdvd_model(model, dataset_val, valnoisestd, temp_psz, device):
 
     avg_psnr = total_psnr / cnt
     return avg_psnr
+'''
+def validate_fastdvd_model(model, dataset_val, valnoisestd, temp_psz, device):
+
+    model.eval()
+    total_psnr = 0.0
+    cnt = 0
+
+    # 将噪声标准差归一化到 [0,1]
+    noise_std = valnoisestd
+
+    with torch.no_grad():
+        for batch_idx, seq in enumerate(dataset_val):
+            # 如果 dataset_val 返回的是 [1, T, C, H, W]，去掉 batch 维
+            if seq.dim() == 5 and seq.shape[0] == 1:
+                seq = seq.squeeze(0)  # -> [T, C, H, W]
+
+            seq = seq.to(device)  # GT 干净序列 [T, C, H, W]
+            noise = torch.empty_like(seq).normal_(mean=0, std=noise_std)
+            noisy_seq = torch.clamp(seq + noise, 0.0, 1.0)
+            sigma_noise = torch.tensor([noise_std], device=device)
+            out_val = denoise_seq_fastdvdnet(
+                seq=noisy_seq,
+                noise_std=sigma_noise,
+                temporal_window=temp_psz,
+                model=model
+            )
+            total_psnr += batch_psnr(out_val.cpu(), seq.cpu(), data_range=1.0)
+            cnt += 1
+    avg_psnr = total_psnr / cnt
+    return avg_psnr
+
 
 
 
