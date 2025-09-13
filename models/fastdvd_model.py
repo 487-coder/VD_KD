@@ -255,8 +255,8 @@ def validate_fastdvd_model(model, dataset_val, valnoisestd, temp_psz, device):
                 seq = seq.squeeze(0)
         # Add Gaussian noise
             noise = torch.FloatTensor(seq.size()).normal_(mean=0, std=valnoisestd)
-            seqn_val = (seq + noise).cuda()
-            sigma_noise = torch.tensor([valnoisestd], device='cuda')
+            seqn_val = (seq + noise).to(device)
+            sigma_noise = torch.tensor([valnoisestd], device=device)
 
             out_val = denoise_seq_fastdvdnet(
                 seq=seqn_val,

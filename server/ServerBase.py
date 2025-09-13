@@ -32,38 +32,17 @@ class Server(object):
         self.distill_optimizers = {model_name: torch.optim.Adam(
             self.model_dict[model_name].parameters(), lr=1e-4)
             for model_name in self.model_names}
-        self.model_dataset_configs = {
-            'fastdvdnet': {
-                'temp_patch_size': args.temp_patch_size,
-                'patch_size': args.patch_size,
-                'temp_stride': 3,
-                'batch_size':self.args.batch_size
-            },
-            'SwinIR': {
-                'temp_patch_size': 1,  # sequence_length=1 对应
-                'patch_size': 128,  # crop_size=128
-                'temp_stride': -1,
-                'batch_size': 2
-            }
-        }
-        self.distill_data_dict = {}
-        self.distill_loader_dict = {}
-
-        for model_name in self.model_names:
-            config = self.model_dataset_configs[model_name]
-            # 每个模型都使用相同的distill_data，但用不同的参数处理
-            self.distill_data_dict[model_name] = ServerDataset(
-                distill_data,  # 相同的原始数据
-                config['temp_patch_size'],
-                config['patch_size'],
-                random_shuffle=True,
-                temp_stride=config['temp_stride']
+        self.distill_data = ServerDataset(
+            distill_data, self.args.temp_patch_size,
+            128,
+            random_shuffle=True,
+            temp_stride=3
             )
-            self.distill_loader_dict[model_name] = DataLoader(
-                self.distill_data_dict[model_name],
-                batch_size=config['batch_size'],
-                shuffle=False,
-                num_workers=4
+        self.distill_loader = DataLoader(
+            self.distill_data,
+            batch_size=16,
+            shuffle=False,
+            num_workers=4
             )
         '''
         self.distill_data = ServerDataset(distill_data, args.temp_patch_size, args.patch_size,
@@ -145,7 +124,7 @@ class Server(object):
         for model_name in self.model_names:
             model = self.model_dict[model_name]
             optimizer = self.distill_optimizers[model_name]
-            distill_loader = self.distill_loader_dict[model_name]
+            distill_loader = self.distill_loader
             model.to(self.device)
             model.train()
             criterion = self.distill_criterion.to(self.device)
@@ -158,16 +137,9 @@ class Server(object):
                 for batch_idx, (seq,gt) in enumerate(distill_loader):
                     model.train()
                     optimizer.zero_grad()
-                    if model_name == 'SwinIR':
-                        ctrl_fr_idx = 0  # 单帧情况下使用第一帧
-                    else:
-                        ctrl_fr_idx = self.ctrl_fr_idx  # FastDVDnet使用中心帧
-                    img_train, gt_train = normalize_augment(seq, ctrl_fr_idx)
-                    if img_train.dim() == 5:
-                        img_train = img_train.squeeze(1)
-                        print("test_size")# Remove time dimension
-                    if gt_train.dim() == 5:
-                        gt_train = gt_train.squeeze(1)
+
+                    img_train, gt_train = normalize_augment(seq, self.ctrl_fr_idx)
+
                     img_train = img_train.to(self.device, non_blocking=True)
                     gt_train = gt_train.to(self.device, non_blocking=True)
                     N, _, H, W = img_train.size()
@@ -177,12 +149,14 @@ class Server(object):
 
                     noise = torch.normal(mean=0.0, std=stdn.expand_as(img_train))
                     imgn_train = img_train + noise
+                    gtn_train = gt_train + noise
                     imgn_train = torch.clamp(imgn_train, 0.0, 1.0)
+                    gtn_train = torch.clamp(gtn_train, 0.0, 1.0)
                     noise_map = stdn.expand((N, 1, H, W)).to(self.device)
                     if model_name == "fastdvdnet":
                         student_outputs = model(imgn_train, noise_map)
                     elif model_name == "SwinIR":
-                        student_outputs = model(imgn_train)
+                        student_outputs = model(gtn_train)
                     soft_target = []
                     if self.mode == "mean output":
                         teacher_outputs = []
@@ -191,7 +165,7 @@ class Server(object):
                                 if teacher.model_name == "fastdvdnet":
                                     teacher_denoised = teacher.model(imgn_train, noise_map)
                                 elif teacher.model_name == "SwinIR":
-                                    teacher_denoised = teacher.model(imgn_train)
+                                    teacher_denoised = teacher.model(gtn_train)
                                 teacher_outputs.append(teacher_denoised)
                         if teacher_outputs:
                             soft_target = torch.stack(teacher_outputs).mean(dim=0)
@@ -221,7 +195,10 @@ class Server(object):
             for idx in idxs_users:
                 if self.args.upload_model == True:
                     self.clients[idx].load_model(self.model_dict[self.clients[idx].model_name].state_dict())
-                w, loss = self.clients[idx].update_weights(global_round=epoch,lr=current_lr)
+                if self.clients[idx].model_name == "fastdvdnet":
+                    w, loss = self.clients[idx].update_fastdvd_weights(global_round=epoch,lr=current_lr)
+                else:
+                    w, loss = self.clients[idx].update_SwinIR_weights(global_round=epoch,lr= current_lr)
                 local_losses.append(copy.deepcopy(loss))
                 local_weights.append(copy.deepcopy(w))
                 local_psnr = self.clients[idx].test_psnr()
