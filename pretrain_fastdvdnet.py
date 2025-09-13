@@ -1,6 +1,6 @@
 import torch
 from torch.utils.data import DataLoader
-from models import FastDVDnet,denoise_seq_fastdvdnet
+from models.fastdvd_model import FastDVDnet,denoise_seq_fastdvdnet
 from pathlib import Path
 import torch.optim as optim
 from dataset import ServerDataset

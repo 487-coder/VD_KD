@@ -1,37 +1,73 @@
 import copy
 from typing import List
 
-from utils import batch_psnr,normalize_augment
+from utils import normalize_augment
 from torch import nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from utils import save_model_checkpoint
-from models import denoise_seq_fastdvdnet
-import models
+from models.SwinIR_model import SwinIR,validate_SwinIR_model
+from models.fastdvd_model import FastDVDnet,validate_fastdvd_model
 from pathlib import Path
 from pretrain_fastdvdnet import pretrain_fastdvdnet
+from pretrain_SwinIR import pretrain_SwinIR
 import torch
 from client import Client
 from dataset import ServerDataset
 import numpy as np
 class Server(object):
     def __init__(self,args,model_names,pretrain_data,val_dataset,distill_data,
-                 client_dataloaders,local_test_dataloader,
+                 client_dataset_path,local_test_dataloader,
                  logger,mode,device):
         super(Server, self).__init__()
         self.args = args
-        # global model
+
         self.model_names = model_names
-        self.model_dict = {model_name: models.get_model(model_name)() for model_name in self.model_names}
-        # global distill datasets
+        self.model_dict = {"fastdvdnet":FastDVDnet,
+                           "SwinIR": SwinIR}
+
         self.pretrain_data = pretrain_data
+        #
         self.distill_criterion = nn.MSELoss()
         self.distill_optimizers = {model_name: torch.optim.Adam(
             self.model_dict[model_name].parameters(), lr=1e-4)
             for model_name in self.model_names}
+        self.model_dataset_configs = {
+            'fastdvdnet': {
+                'temp_patch_size': args.temp_patch_size,
+                'patch_size': args.patch_size,
+                'temp_stride': 3
+            },
+            'SwinIR': {
+                'temp_patch_size': 1,  # sequence_length=1 对应
+                'patch_size': 128,  # crop_size=128
+                'temp_stride': -1
+            }
+        }
+        self.distill_data_dict = {}
+        self.distill_loader_dict = {}
+
+        for model_name in self.model_names:
+            config = self.model_dataset_configs[model_name]
+            # 每个模型都使用相同的distill_data，但用不同的参数处理
+            self.distill_data_dict[model_name] = ServerDataset(
+                distill_data,  # 相同的原始数据
+                config['temp_patch_size'],
+                config['patch_size'],
+                random_shuffle=True,
+                temp_stride=config['temp_stride']
+            )
+            self.distill_loader_dict[model_name] = DataLoader(
+                self.distill_data_dict[model_name],
+                batch_size=self.args.batch_size,
+                shuffle=False,
+                num_workers=4
+            )
+        '''
         self.distill_data = ServerDataset(distill_data, args.temp_patch_size, args.patch_size,
                                           random_shuffle=True, temp_stride=3)
         self.distill_loader = DataLoader(self.distill_data, batch_size=self.args.batch_size, shuffle=False, num_workers=4)
+        '''
         # 其他
         self.device = device
         self.mode = mode
@@ -42,7 +78,7 @@ class Server(object):
         self.ctrl_fr_idx = (self.args.temp_psz - 1) // 2
         # clients
         self.clients: List[Client] = []  # 添加类型
-        self.client_dataloader = client_dataloaders
+        self.client_dataset_path = client_dataset_path
         self.local_test_dataloader = local_test_dataloader
 
 
@@ -52,12 +88,13 @@ class Server(object):
         for model_name, count in model_config.items():
             for _ in range(count):
                 client = Client(self.args, copy.deepcopy(self.model_dict[model_name]),
-                                self.client_dataloader[idx],self.local_test_dataloader[idx],
+                                self.client_dataset_path[idx],self.local_test_dataloader[idx],
                                 logger=self.logger,device=self.device,model_name=model_name, idx=idx)
                 self.clients.append(client)
                 idx += 1
     def get_pretrain_model(self):
-        pretrain_func_map = {"fastdvdnet": pretrain_fastdvdnet}
+        pretrain_func_map = {"fastdvdnet": pretrain_fastdvdnet,
+                             "SwinIR": pretrain_SwinIR}
         for model_name, model in self.model_dict.items():
             exist_pretrain_model = (Path(f"{self.args.pretrain_model}") / f"{model_name}.pth").exists()
             if not exist_pretrain_model:
@@ -106,6 +143,7 @@ class Server(object):
         for model_name in self.model_names:
             model = self.model_dict[model_name]
             optimizer = self.distill_optimizers[model_name]
+            distill_loader = self.distill_loader_dict[model_name]
             model.to(self.device)
             model.train()
             criterion = self.distill_criterion.to(self.device)
@@ -115,10 +153,19 @@ class Server(object):
             for epoch in range(epochs):
                 batch_loss = []
                 step_count = 0
-                for batch_idx, (seq,gt) in enumerate(self.distill_loader):
+                for batch_idx, (seq,gt) in enumerate(distill_loader):
                     model.train()
                     optimizer.zero_grad()
-                    img_train, gt_train = normalize_augment(seq, self.ctrl_fr_idx)
+                    if model_name == 'SwinIR':
+                        ctrl_fr_idx = 0  # 单帧情况下使用第一帧
+                    else:
+                        ctrl_fr_idx = self.ctrl_fr_idx  # FastDVDnet使用中心帧
+                    img_train, gt_train = normalize_augment(seq, ctrl_fr_idx)
+                    if img_train.dim() == 5:
+                        img_train = img_train.squeeze(1)
+                        print("test_size")# Remove time dimension
+                    if gt_train.dim() == 5:
+                        gt_train = gt_train.squeeze(1)
                     img_train = img_train.to(self.device, non_blocking=True)
                     gt_train = gt_train.to(self.device, non_blocking=True)
                     N, _, H, W = img_train.size()
@@ -130,13 +177,19 @@ class Server(object):
                     imgn_train = img_train + noise
                     imgn_train = torch.clamp(imgn_train, 0.0, 1.0)
                     noise_map = stdn.expand((N, 1, H, W)).to(self.device)
-                    student_outputs = model(imgn_train, noise_map)
+                    if model_name == "fastdvdnet":
+                        student_outputs = model(imgn_train, noise_map)
+                    elif model_name == "SwinIR":
+                        student_outputs = model(imgn_train)
                     soft_target = []
                     if self.mode == "mean output":
                         teacher_outputs = []
                         with torch.no_grad():
                             for teacher in self.clients:
-                                teacher_denoised = teacher.model(imgn_train, noise_map)
+                                if teacher.model_name == "fastdvdnet":
+                                    teacher_denoised = teacher.model(imgn_train, noise_map)
+                                elif teacher.model_name == "SwinIR":
+                                    teacher_denoised = teacher.model(imgn_train)
                                 teacher_outputs.append(teacher_denoised)
                         if teacher_outputs:
                             soft_target = torch.stack(teacher_outputs).mean(dim=0)
@@ -147,18 +200,17 @@ class Server(object):
                     aux_loss_weight = 0.2
                     aux_loss = nn.MSELoss()(student_outputs, gt_train)
                     total_loss_batch = (1 - aux_loss_weight) * loss + aux_loss_weight * aux_loss
-                    total_loss_batch = total_loss_batch / (N*2)
                     total_loss_batch.backward()
                     optimizer.step()
                     step_count += 1
                     if step_count % 5 ==0:
-                        print(f'Epoch: [{epoch}/{epochs}], Step: [{step_count}],model:[{model_name}], loss:[{total_loss_batch.item():.6f}]')
+                        print(f'Epoch: [{epoch}/{epochs}], Step: [{step_count}],model:[{model_name}], loss:[{total_loss_batch}]')
                     batch_loss.append(total_loss_batch.item())
                 epoch_loss.append(sum(batch_loss) / len(batch_loss))
     def train(self):
         train_loss = []
         for epoch in tqdm(range(self.args.num_epochs)):
-            current_lr = self.args.lr * (0.1 ** (epoch // 3))
+            current_lr = self.args.lr * (0.1 ** (epoch // 3)) ## ?
             global_psnr = 0
             local_weights, local_losses = [], []
             print(f'\n | Global Training Round : {epoch + 1} |\n')
@@ -208,51 +260,25 @@ class Server(object):
         for model_name in self.model_names:
             model = self.model_dict[model_name]
             model.eval()
-            total_psnr = 0.0
-            total_noisy_psnr = 0.0
-            cnt = 0
 
-            for idx, (seq,) in enumerate(self.global_test_loader):
-                seq = seq.to(self.device)  # [1, T, C, H, W]
-                if seq.dim() == 5 and seq.shape[0] == 1:
-                    seq = seq.squeeze(0)  # [T, C, H, W]
-
-                noise = torch.empty_like(seq).normal_(mean=0, std=self.args.test_noise).to(self.device)
-                noisy_seq = seq + noise
-                noisy_seq = torch.clamp(noisy_seq, 0.0, 1.0)
-
-                noise_map = torch.tensor([self.args.test_noise], dtype=torch.float32).to(self.device)
-
-                with torch.no_grad():
-                    denoised_seq = denoise_seq_fastdvdnet(
-                        seq=noisy_seq,
-                        noise_std=noise_map,
-                        temporal_window=self.args.temp_psz,
-                        model=model
+            if model_name == "fastdvdnet":
+                avg_psnr = validate_fastdvd_model(
+                    model = model,
+                    dataset_val=self.global_test_loader,
+                    valnoisestd=self.args.test_noise,
+                    temp_psz= self.args.temp_psz,
+                    device=self.device
                     )
-
-                # 中心帧比较
-                gt = seq[self.ctrl_fr_idx].unsqueeze(0)
-                pred = denoised_seq[self.ctrl_fr_idx].unsqueeze(0)
-                noisy_center = noisy_seq[self.ctrl_fr_idx].unsqueeze(0)
-                #print("GT min/max:", gt.min().item(), gt.max().item())
-                #print("Pred min/max:", pred.min().item(), pred.max().item())
-
-                psnr_clean = batch_psnr(pred, gt, data_range=1.0)
-                psnr_noisy = batch_psnr(noisy_center, gt, data_range=1.0)
-
-                total_psnr += psnr_clean
-                total_noisy_psnr += psnr_noisy
-                cnt += 1
-
-                print(f"{model_name} [{idx}] PSNR_noisy: {psnr_noisy:.2f} dB | PSNR_denoised: {psnr_clean:.2f} dB")
-
-            avg_psnr = total_psnr / cnt
-            avg_psnr_noisy = total_noisy_psnr / cnt
+            elif model_name == "SwinIR":
+                avg_psnr = validate_SwinIR_model(
+                    args=self.args,
+                    model=model,
+                    dataset_val=self.global_test_loader,
+                    valnoisestd=self.args.test_noise,
+                    device=self.device
+                )
             self.logger.add_scalar(f'Global_{model_name}/Test_PSNR', avg_psnr, epoch)
-            self.logger.add_scalar(f'Global_{model_name }/Test_PSNR_Noisy', avg_psnr_noisy, epoch)
-
-            print(f"\n[Global Test PSNR] {model_name} Clean: {avg_psnr:.4f} dB | Noisy: {avg_psnr_noisy:.4f} dB\n")
+            print(f"\n[Global Test PSNR] {model_name} Clean: {avg_psnr:.4f} dB")
 
 
 

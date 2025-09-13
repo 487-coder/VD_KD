@@ -7,7 +7,7 @@ def args_parser():
                         help='pretrain model file dir')
     parser.add_argument('--train_dataset', default='./mp4',
                         help='train file root')
-    parser.add_argument('--client_numbers', type=int, default=10,
+    parser.add_argument('--client_numbers', type=int, default=7,
                         help='client number')
     parser.add_argument('--val_data', default='./480p',
                         help='test file root')
@@ -19,7 +19,7 @@ def args_parser():
                         help='pretrain batch size')
     parser.add_argument('--server_data', default='./server_data',
                         help='server dataset dictionary')
-    parser.add_argument('--model_names', nargs='+', type=str, default=["fastdvdnet"],
+    parser.add_argument('--model_names', nargs='+', type=str, default=["SwinIR","fastdvdnet"],
                         help='model names')
     parser.add_argument('--mode',type=str,default='mean output',
                         help='distill aggregation mode')
@@ -33,9 +33,9 @@ def args_parser():
                         help="Initial learning rate")
     parser.add_argument("--pretrain_epoch", "--e", type=int, default=5,
                         help="Number of pre training epochs")
-    parser.add_argument("--noise_level", nargs=2, type=float, default=[5, 55],
+    parser.add_argument("--noise_level", nargs=2, type=float, default=[5/255.0, 55/255.0],
                         help="Noise training interval")
-    parser.add_argument("--test_noise", type=float, default=25,
+    parser.add_argument("--test_noise", type=float, default=25 / 255.0,
                         help='noise level used on validation set')
     parser.add_argument("--temp_psz", type=int, default=5,
                         help="Temporal patch size")
@@ -43,7 +43,7 @@ def args_parser():
                         help='iterations of local updating')
     parser.add_argument('--save_dir', default=None,
                         help='save model path')
-    parser.add_argument('--model_counts', nargs='+', type=int, default=[5],
+    parser.add_argument('--model_counts', nargs='+', type=int, default=[2,5],
                         help='model count for each model type')
     parser.add_argument('--sampling_rate', type=float, default=1,
                         help='frac of local models to update')

@@ -4,6 +4,7 @@ Definition of the FastDVDnet model
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from utils import batch_psnr
 
 class CvBlock(nn.Module):
     """(Conv2d => BN => ReLU) x 2"""
@@ -196,8 +197,7 @@ class FastDVDnet(nn.Module):
 
 
 
-def get_model(model_name):
-    return {"fastdvdnet":FastDVDnet}[model_name]
+
 def frame_denoise(model, noise_frame, sigma_map, context):
     _, _, h, w = noise_frame.shape
     pad_h = (4 - h % 4)
@@ -244,3 +244,31 @@ def denoise_seq_fastdvdnet(seq, noise_std, model, temporal_window=5, is_training
         del input_tensor
         torch.cuda.empty_cache()
         return denoise_frames
+def validate_fastdvd_model(model, dataset_val, valnoisestd, temp_psz, device):
+    """Run validation and log PSNR + sample images."""
+    total_psnr = 0.0
+    cnt = 0
+    with torch.no_grad():
+        for batch_idx, seq in enumerate(dataset_val):
+            seq = seq.to(device)
+            if seq.dim() == 5 and seq.shape[0] == 1:
+                seq = seq.squeeze(0)
+        # Add Gaussian noise
+            noise = torch.FloatTensor(seq.size()).normal_(mean=0, std=valnoisestd)
+            seqn_val = (seq + noise).cuda()
+            sigma_noise = torch.tensor([valnoisestd], device='cuda')
+
+            out_val = denoise_seq_fastdvdnet(
+                seq=seqn_val,
+                noise_std=sigma_noise,
+                temporal_window=temp_psz,
+                model=model
+            )
+            cnt += 1
+        total_psnr += batch_psnr(out_val.cpu(), seq.squeeze_(), data_range=1.0)
+
+    avg_psnr = total_psnr / cnt
+    return avg_psnr
+
+
+
