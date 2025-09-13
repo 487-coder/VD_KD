@@ -23,8 +23,8 @@ class Server(object):
         self.args = args
 
         self.model_names = model_names
-        self.model_dict = {"fastdvdnet":FastDVDnet,
-                           "SwinIR": SwinIR}
+        self.model_dict = {"fastdvdnet":FastDVDnet(),
+                           "SwinIR": SwinIR()}
 
         self.pretrain_data = pretrain_data
         #
@@ -36,12 +36,14 @@ class Server(object):
             'fastdvdnet': {
                 'temp_patch_size': args.temp_patch_size,
                 'patch_size': args.patch_size,
-                'temp_stride': 3
+                'temp_stride': 3,
+                'batch_size':self.args.batch_size
             },
             'SwinIR': {
                 'temp_patch_size': 1,  # sequence_length=1 对应
                 'patch_size': 128,  # crop_size=128
-                'temp_stride': -1
+                'temp_stride': -1,
+                'batch_size': 2
             }
         }
         self.distill_data_dict = {}
@@ -59,7 +61,7 @@ class Server(object):
             )
             self.distill_loader_dict[model_name] = DataLoader(
                 self.distill_data_dict[model_name],
-                batch_size=self.args.batch_size,
+                batch_size=config['batch_size'],
                 shuffle=False,
                 num_workers=4
             )
