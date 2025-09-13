@@ -265,7 +265,7 @@ def validate_fastdvd_model(model, dataset_val, valnoisestd, temp_psz, device):
                 model=model
             )
             cnt += 1
-        total_psnr += batch_psnr(out_val.cpu(), seq.squeeze_(), data_range=1.0)
+            total_psnr += batch_psnr(out_val.cpu(), seq.squeeze_(), data_range=1.0)
 
     avg_psnr = total_psnr / cnt
     return avg_psnr
