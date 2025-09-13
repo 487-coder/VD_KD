@@ -205,6 +205,7 @@ def save_model_checkpoint(model, config, optimizer, train_pars, epoch, role="glo
         role: 'client' or 'global'
         client_id: int, required if role is 'client'
     """
+
     # === Set subdirectory path ===
     if role == "client":
         assert client_id is not None, "client_id must be provided when role is 'client'"
