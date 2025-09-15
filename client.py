@@ -3,11 +3,13 @@ from torch.utils.data import DataLoader
 import torch
 from dataset import LocalDataset
 from torch import nn
-from models.SwinIR_model import CharbonnierLoss,validate_SwinIR_model
+from models.SwinIR_model import CharbonnierLoss, validate_SwinIR_model
 from models.fastdvd_model import validate_fastdvd_model
-from utils import normalize_augment,orthogonal_conv_weights,save_model_checkpoint,batch_psnr
+from utils import normalize_augment, orthogonal_conv_weights, save_model_checkpoint, batch_psnr
+
+
 class Client(object):
-    def __init__(self,args,model,train_dataset_path,testloader,logger,device,model_name,idx):
+    def __init__(self, args, model, train_dataset_path, testloader, logger, device, model_name, idx):
         '''client = Client(self.args, copy.deepcopy(self.model_dict[model_name]),
                                     self.client_dataloader[idx],self.local_test_dataloader[idx],
                                     logger=self.logger,device=self.device,model_name=model_name, idx=idx)'''
@@ -21,26 +23,28 @@ class Client(object):
         self.idx = idx
         if self.model_name == 'fastdvdnet':
             self.ctrl_fr_idx = (self.args.temp_psz - 1) // 2
-            self.trainset = LocalDataset(self.train_dataset_path,sequence_length= 5,crop_size=96,
-                                         epoch_size = self.args.max_number_patches,
-                                         random_shuffle= True, temp_stride= 3)
+            self.trainset = LocalDataset(self.train_dataset_path, sequence_length=5, crop_size=96,
+                                         epoch_size=self.args.max_number_patches,
+                                         random_shuffle=True, temp_stride=3)
             self.train_loader = DataLoader(self.trainset, batch_size=self.args.batch_size,
                                            shuffle=False, num_workers=4)
             self.criterion = nn.MSELoss(reduction='sum').to(device)
         elif self.model_name == 'SwinIR':
-            self.trainset = LocalDataset(self.train_dataset_path,sequence_length=1,
-                                         crop_size= 128,epoch_size= -1,random_shuffle=True,
+            self.trainset = LocalDataset(self.train_dataset_path, sequence_length=1,
+                                         crop_size=128, epoch_size=-1, random_shuffle=True,
                                          temp_stride=-1)
-            self.train_loader = DataLoader(self.trainset,batch_size= 2,
-                                           shuffle=False, num_workers= 4)
+            self.train_loader = DataLoader(self.trainset, batch_size=2,
+                                           shuffle=False, num_workers=4)
             self.ctrl_fr_idx = 0
             self.criterion = CharbonnierLoss(1e-9).to(device)
-    def update_weights(self,global_round,lr):
+
+    def update_weights(self, global_round, lr):
         if self.model_name == 'fastdvdnet':
             self.update_fastdvd_weights(global_round, lr)
         else:
-            self.update_SwinIR_weights(global_round,lr)
-    def update_SwinIR_weights(self,global_round,lr):
+            self.update_SwinIR_weights(global_round, lr)
+
+    def update_SwinIR_weights(self, global_round, lr):
         self.model.to(self.device)
         criterion = self.criterion.to(self.device)
         optim_params = []
@@ -50,8 +54,8 @@ class Client(object):
             else:
                 print('Params [{:s}] will not optimize.'.format(k))
         optimizer = torch.optim.Adam(optim_params, lr=2e-4,
-                         betas=(0.9, 0.999),
-                         weight_decay=0)
+                                     betas=(0.9, 0.999),
+                                     weight_decay=0)
         epoch_loss = []
         for epoch in range(self.args.local_ep):
             batch_loss = []
@@ -103,12 +107,7 @@ class Client(object):
 
         return self.model.state_dict(), sum(epoch_loss) / len(epoch_loss)
 
-
-
-
-
-
-    def update_fastdvd_weights(self,global_round,lr):
+    def update_fastdvd_weights(self, global_round, lr):
         self.model.to(self.device)
         self.model.train()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
@@ -147,9 +146,10 @@ class Client(object):
                         self.model.apply(orthogonal_conv_weights)
                         print(f"Applied orthogonalization at epoch {epoch}, step {step_count}")
                 if batch_idx % 10 == 0:
-                    print(f"| Global Round: {global_round} | Client: {self.idx} ,{self.model_name}| Local Epoch: {epoch} | "
-                          f"[{batch_idx * len(img_train)}/{len(self.train_loader)} ({100. * batch_idx / len(self.train_loader):.0f}%)] "
-                          f"\tLoss: {loss.item():.6f}")
+                    print(
+                        f"| Global Round: {global_round} | Client: {self.idx} ,{self.model_name}| Local Epoch: {epoch} | "
+                        f"[{batch_idx * len(img_train)}/{len(self.train_loader)} ({100. * batch_idx / len(self.train_loader):.0f}%)] "
+                        f"\tLoss: {loss.item():.6f}")
                     self.logger.add_scalar(f'client {self.idx},{self.model_name}loss', loss.item())
 
                 batch_loss.append(loss.item())
@@ -174,6 +174,7 @@ class Client(object):
 
         return self.model.state_dict(), sum(epoch_loss) / len(epoch_loss)
 
+    '''
     def test_psnr(self):
         self.model.eval()
         if self.model_name == "fastdvdnet":
@@ -195,9 +196,36 @@ class Client(object):
         print(f"[Client {self.idx},{self.model_name}] PSNR : {avg_psnr:.2f}")
         return avg_psnr
 
+    '''
 
+    # 4. 在client.py中的使用示例
+    def test_psnr(self):
+        """
+        替换原来的test_psnr函数，用于调试
+        """
 
+        if self.model_name == "fastdvdnet":
+            # 设置CUDNN
 
+            # 使用调试版本的验证函数
+            avg_psnr = validate_fastdvd_model(
+                model=self.model,
+                dataset_val=self.testloader,
+                valnoisestd=self.args.test_noise,
+                temp_psz=self.args.temp_psz,
+                device=self.device
+            )
+        elif self.model_name == "SwinIR":
+            avg_psnr = validate_SwinIR_model(
+                args=self.args,
+                model=self.model,
+                dataset_val=self.testloader,
+                valnoisestd=self.args.test_noise,
+                device=self.device
+            )
+
+        print(f"[Client {self.idx},{self.model_name}] PSNR : {avg_psnr:.2f}")
+        return avg_psnr
 
     def load_model(self, global_weights):
         self.model.load_state_dict(global_weights)

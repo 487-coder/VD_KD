@@ -239,53 +239,28 @@ def denoise_seq_fastdvdnet(seq, noise_std, model, temporal_window=5, is_training
                 frames.append(seq[rel_index])
 
             input_tensor = torch.stack(frames, dim=0).view(1, temporal_window * c, h, w).to(seq.device)
-            denoise_frames[denoise_index] = frame_denoise(model, input_tensor, noise_map, context)
+            x = frame_denoise(model, input_tensor, noise_map, context)
+
+            denoise_frames[denoise_index] = x.squeeze(0)
         del frames
         del input_tensor
         torch.cuda.empty_cache()
         return denoise_frames
-'''
-def validate_fastdvd_model(model, dataset_val, valnoisestd, temp_psz, device):
-    """Run validation and log PSNR + sample images."""
-    total_psnr = 0.0
-    cnt = 0
-    with torch.no_grad():
-        for batch_idx, seq in enumerate(dataset_val):
-            seq = seq.to(device)
-            if seq.dim() == 5 and seq.shape[0] == 1:
-                seq = seq.squeeze(0)
-        # Add Gaussian noise
-            noise = torch.empty_like(seq).normal_(mean=0, std=valnoisestd)
-            noisy_frame = seq + noise
-            seqn_val= torch.clamp(noisy_frame, 0.0, 1.0)
-            #noise = torch.FloatTensor(seq.size()).normal_(mean=0, std=valnoisestd)
-            #seqn_val = (seq + noise).to(device)
 
-            sigma_noise = torch.tensor([valnoisestd], device=device)
 
-            out_val = denoise_seq_fastdvdnet(
-                seq=seqn_val,
-                noise_std=sigma_noise,
-                temporal_window=temp_psz,
-                model=model
-            )
-            cnt += 1
-            total_psnr += batch_psnr(out_val.cpu(), seq.squeeze_(), data_range=1.0)
-
-    avg_psnr = total_psnr / cnt
-    return avg_psnr
-'''
-def validate_fastdvd_model(model, dataset_val, valnoisestd, temp_psz, device):
-
+def validate_fastdvd_model(model, dataset_val, valnoisestd, temp_psz, device,role = "client"):
     model.eval()
     total_psnr = 0.0
     cnt = 0
 
     # 将噪声标准差归一化到 [0,1]
     noise_std = valnoisestd
+    #print(noise_std)
 
     with torch.no_grad():
         for batch_idx, seq in enumerate(dataset_val):
+            if role == "global_test":
+                print(f"{batch_idx} / {len(dataset_val)}")
             # 如果 dataset_val 返回的是 [1, T, C, H, W]，去掉 batch 维
             if seq.dim() == 5 and seq.shape[0] == 1:
                 seq = seq.squeeze(0)  # -> [T, C, H, W]
@@ -300,11 +275,26 @@ def validate_fastdvd_model(model, dataset_val, valnoisestd, temp_psz, device):
                 temporal_window=temp_psz,
                 model=model
             )
-            total_psnr += batch_psnr(out_val.cpu(), seq.cpu(), data_range=1.0)
+            save_seq(seq, "gt_frames", "gt")
+            save_seq(noisy_seq,"noise_seq","seqn")
+
+            save_seq(out_val, "denoised_frames", "denoised")
+            total_psnr += batch_psnr(out_val.cpu(), seq.squeeze().cpu(), data_range=1.0)
             cnt += 1
     avg_psnr = total_psnr / cnt
     return avg_psnr
 
 
+import torchvision.utils as vutils
+import torchvision.transforms.functional as TF
+import os
 
+
+def save_seq(seq_tensor, save_dir, prefix="frame"):
+    os.makedirs(save_dir, exist_ok=True)
+    T = seq_tensor.shape[0]
+    for i in range(T):
+        frame = seq_tensor[i].cpu()
+        frame = TF.to_pil_image(frame)
+        frame.save(os.path.join(save_dir, f"{prefix}_{i:02d}.png"))
 

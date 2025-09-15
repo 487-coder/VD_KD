@@ -27,7 +27,7 @@ def get_image_names(seq_dir, pattern=None):
 
 class Normalize(nn.Module):
     def forward(self, x):
-        print("cnm",x.shape)
+        #print("cnm",x.shape)
         if x.max() > 1:
             x = x.float() / 255.0
         else:
@@ -75,7 +75,7 @@ class Augment(nn.Module):
         F = FC // 3
         out = torch.empty_like(x,requires_grad=x.requires_grad,device=x.device)
         op_name = random.choices(self.op_names, weights=self.weights, k=1)[0]
-        print(op_name, "new")
+        #print(op_name, "new")
         for n in range(N):
             for f in range(F):
                 img = x[n, f * 3:f * 3 + 3]  # [3, H, W]

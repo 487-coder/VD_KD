@@ -30,6 +30,16 @@ client_dataloader = {}
 client_test_dataloader = {}
 for i in range(args.client_numbers):
     client_dataset[i] = client_dataset_path[i]
+    '''
+    if i < args.model_counts[0]:
+        client_dataset[i] = LocalDataset(client_dataset_path[i],sequence_length= 1,crop_size= 128,
+                                         epoch_size= -1,random_shuffle= True, temp_stride= -1)
+        client_dataloader[i] = DataLoader(client_dataset[i], batch_size=2, shuffle=False, num_workers=4)
+    else:
+        client_dataset[i] = LocalDataset(client_dataset_path[i],sequence_length= 5, crop_size=args.patch_size,
+                                        epoch_size=args.max_number_patches,random_shuffle=True,temp_stride= 3)
+        client_dataloader[i] = DataLoader(client_dataset[i],batch_size=args.batch_size,shuffle=False,num_workers=4)
+    '''
     client_test_dataloader[i] = DataLoader(client_testset[i],batch_size=1)
 #分发数据集
 pretrain_data, distill_data = partition_server_data(args.server_data,split_ratio =0.3,shuffle=True,seed= 10000)
