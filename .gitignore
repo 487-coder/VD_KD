@@ -1,2 +1,7 @@
 server_data/
 .idea/
+.ipynb_checkpoints/
+server/.ipynb_checkpoints/
+models/.ipynb_checkpoints/
+models/logs/
+models/model_checkpoint/

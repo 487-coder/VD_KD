@@ -23,11 +23,74 @@ def get_image_names(seq_dir, pattern=None):
     files.sort(key=lambda file: int(''.join(filter(str.isdigit, file.name))))
     return [str(file) for file in files]
 
+class Normalize_for_RVRT(nn.Module):
+    def forward(self, x):
+        print("cnm", x.shape)
+        x = x.float() / 255.0
+        # 保持 NFCHW 格式，不再合并 F 和 C 维度
+        return x
 
+
+class Augment_for_RVRT(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.op_names = [
+            'do_nothing', 'flipud', 'rot90', 'rot90_flipud',
+            'rot180', 'rot180_flipud', 'rot270', 'rot270_flipud', 'add_noise'
+        ]
+        self.weights = [32, 12, 12, 12, 12, 12, 12, 12, 12]
+
+    def augment(self, op_name, img):
+        # 输入 img 格式: [C, H, W]
+        match op_name:
+            case 'do_nothing':
+                return img
+            case 'flipud':
+                return torch.flip(img, dims=[1])  # 沿 H 维度翻转
+            case 'rot90':
+                return torch.rot90(img, k=1, dims=[1, 2])  # 在 H, W 平面旋转
+            case 'rot90_flipud':
+                return torch.flip(torch.rot90(img, k=1, dims=[1, 2]), dims=[1])
+            case 'rot180':
+                return torch.rot90(img, k=2, dims=[1, 2])
+            case 'rot180_flipud':
+                return torch.flip(torch.rot90(img, k=2, dims=[1, 2]), dims=[1])
+            case 'rot270':
+                return torch.rot90(img, k=3, dims=[1, 2])
+            case 'rot270_flipud':
+                return torch.flip(torch.rot90(img, k=3, dims=[1, 2]), dims=[1])
+            case 'add_noise':
+                noise = torch.randn(1, 1, 1, device=img.device) * (5.0 / 255.0)
+                return torch.clamp(img + noise.expand_as(img), 0.0, 1.0)
+            case _:
+                raise ValueError(f"Unsupported op name: {op_name}")
+
+    def forward(self, x):
+        # 输入格式: N, F, C, H, W
+        N, F, C, H, W = x.shape
+        out = torch.empty_like(x)
+        op_name = random.choices(self.op_names, weights=self.weights, k=1)[0]
+        print(op_name, "new")
+
+        for n in range(N):
+            for f in range(F):
+                img = x[n, f]  # [C, H, W]
+                out[n, f] = self.augment(op_name, img)
+        return out
+
+
+def normalize_augment_for_RVRT(data_input, ctrl_fr_idx):
+    video_transform = Compose([
+        Normalize_for_RVRT(),
+        Augment_for_RVRT(),
+    ])
+    img_train = video_transform(data_input)
+    gt_train = img_train
+    return img_train, gt_train
 
 class Normalize(nn.Module):
     def forward(self, x):
-        print("cnm",x.shape)
+        #print("cnm",x.shape)
         if x.max() > 1:
             x = x.float() / 255.0
         else:
@@ -75,7 +138,7 @@ class Augment(nn.Module):
         F = FC // 3
         out = torch.empty_like(x,requires_grad=x.requires_grad,device=x.device)
         op_name = random.choices(self.op_names, weights=self.weights, k=1)[0]
-        print(op_name, "new")
+        #print(op_name, "new")
         for n in range(N):
             for f in range(F):
                 img = x[n, f * 3:f * 3 + 3]  # [3, H, W]
@@ -211,7 +274,7 @@ def save_model_checkpoint(model, config, optimizer, train_pars, epoch, role="glo
         assert client_id is not None, "client_id must be provided when role is 'client'"
         log_dir = Path(config['log_dir']) / f"client_{client_id}"
     else:
-        log_dir = Path(config['log_dir']) / "global"
+        log_dir = Path(config['log_dir']) / f"{role}"
 
     log_dir.mkdir(parents=True, exist_ok=True)
 

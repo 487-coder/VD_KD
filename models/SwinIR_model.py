@@ -6,11 +6,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
-def validate_SwinIR_model(args,model,dataset_val,valnoisestd,device):
+def validate_SwinIR_model(args,model,dataset_val,valnoisestd,device,role = "client"):
     total_psnr = 0.0
     cnt = 0
     with torch.no_grad():
         for batch_idx, seq in enumerate(dataset_val):
+            if role == "global_test":
+                print(f"{batch_idx} / {len(dataset_val)}")
             seq = seq.to(device)
             if seq.dim() == 5 and seq.shape[0] == 1:
                 seq = seq.squeeze(0)
@@ -18,7 +20,7 @@ def validate_SwinIR_model(args,model,dataset_val,valnoisestd,device):
             for frame_idx in range(frame_num):
                 # 获取单帧
                 clean_frame = seq[frame_idx].unsqueeze(0)
-                noise = torch.empty_like(clean_frame).normal_(mean=0, std=valnoisestd)
+                noise = torch.empty_like(clean_frame).normal_(mean=0, std=valnoisestd).to(device)
                 noisy_frame = clean_frame + noise
                 noisy_frame = torch.clamp(noisy_frame, 0.0, 1.0)
 
@@ -34,7 +36,7 @@ def validate_SwinIR_model(args,model,dataset_val,valnoisestd,device):
     avg_psnr = total_psnr / cnt
     return avg_psnr
 
-def frame_denoise_swinir(model, noisy_frame, noise_std, device):
+def frame_denoise_swinir(model, noisy_frame, noise_std, device,context = torch.no_grad()):
     """
     SwinIR单帧去噪函数
     Args:
@@ -49,14 +51,16 @@ def frame_denoise_swinir(model, noisy_frame, noise_std, device):
 
     # 确保尺寸能被某个数整除（根据SwinIR的要求调整）
     # 一般SwinIR要求能被8整除
-    pad_h = (8 - h % 8) % 8
-    pad_w = (8 - w % 8) % 8
+    #pad_h = (8 - h % 8) % 8
+    #pad_w = (8 - w % 8) % 8
+    pad_h = (h // 8 + 1) * 8 - h
+    pad_w = (w // 8 + 1) * 8 - w
 
     if pad_h or pad_w:
         noisy_frame = F.pad(noisy_frame, (0, pad_w, 0, pad_h), mode="reflect")
 
     # SwinIR推理
-    with torch.no_grad():
+    with context:
         denoised_frame = model(noisy_frame)
         denoised_frame = torch.clamp(denoised_frame, 0.0, 1.0)
 

@@ -42,13 +42,14 @@ for i in range(args.client_numbers):
     '''
     client_test_dataloader[i] = DataLoader(client_testset[i],batch_size=1)
 #分发数据集
-pretrain_data, distill_data = partition_server_data(args.server_data,split_ratio =0.3,shuffle=True,seed= 10000)
+distill_data, pretrain_data = partition_server_data(args.server_data,split_ratio =0.3,shuffle=True,seed= 10000)
 
 #初始化server
 server = Server(args,args.model_names,pretrain_data,val_dataset,distill_data,
                 client_dataset_path,client_test_dataloader,logger,args.mode,device)
 #初始化clients
 server.get_pretrain_model()
+#server.global_test_psnr(epoch = -1)
 server.create_clients()
 #初始化模型，分发给对应客户端
 

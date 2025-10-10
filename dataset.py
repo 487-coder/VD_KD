@@ -90,8 +90,8 @@ class ServerDataset(Dataset):
         i, j, h, w = T.RandomCrop.get_params(seq[0], output_size=(self.crop_size, self.crop_size))
         seq = seq[:, :, i:i + h, j:j + w]  # [F, C, Hc, Wc]
         # 中心帧 GT： [1, C, H, W]
-        gt = seq[self.half]  # 取第 self.half 帧
-        return seq, gt
+        gt = seq[self.half]
+        return seq, gt,self.data_path[vid],center
 
 
 
@@ -157,10 +157,11 @@ class LocalDataset(Dataset):
 
 class TestDataset(Dataset):
 
-    def __init__(self, data_dir=None, gray_mode=False, num_input_frames=NUMFRXSEQ_VAL):
+    def __init__(self, data_dir=None, gray_mode=False, num_input_frames=NUMFRXSEQ_VAL,epoch_size = -1):
         self.gray_mode = gray_mode
         self.data_dir = Path(data_dir)
         self.num_input_frames = num_input_frames
+        self.epoch_size = epoch_size
 
         seq_dirs = sorted(self.data_dir.rglob(VALSEQPATT))
         seq_dirs = [p for p in seq_dirs if p.is_dir() and not p.name.startswith('.')]
@@ -178,7 +179,10 @@ class TestDataset(Dataset):
         return torch.from_numpy(self.sequences[index])
 
     def __len__(self):
-        return len(self.sequences)
+        if self.epoch_size > 0:
+            return self.epoch_size
+        else:
+            return len(self.sequences)
 
 def partition_test_dataset(global_test_dataset, client_number):
     np.random.seed(10000)
