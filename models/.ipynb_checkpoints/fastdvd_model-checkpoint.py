@@ -255,8 +255,6 @@ def denoise_seq_fastdvdnet(seq, noise_std, model, temporal_window=5, is_training
       - noise_std.shape == (1,)：整段序列使用统一噪声
       - noise_std.shape == (T, 1, 1, 1)：每帧使用独立噪声
     """
-    seq = seq.clone()
-    #这里的seq改成了clean    
     frame_num, c, h, w = seq.shape
     center = (temporal_window - 1) // 2
     denoise_frames = torch.empty_like(seq).to(seq.device)
@@ -268,11 +266,9 @@ def denoise_seq_fastdvdnet(seq, noise_std, model, temporal_window=5, is_training
     if noise_std.dim() == 1 and noise_std.numel() == 1:
         # 统一噪声
         per_frame_noise = False
-        noise_std = noise_std.clone()
     elif noise_std.dim() == 4 and noise_std.shape[0] == frame_num:
         # 每帧噪声
         per_frame_noise = True
-        noise_std = noise_std.clone()
     else:
         raise ValueError(f"Unsupported noise_std shape: {noise_std.shape}")
 
@@ -290,7 +286,6 @@ def denoise_seq_fastdvdnet(seq, noise_std, model, temporal_window=5, is_training
                     -denoise_index + 2 * (frame_num - 1) - center
                 )
                 frames.append(seq[rel_index])
-
 
             # 输入拼接
             input_tensor = torch.stack(frames, dim=0).view(1, temporal_window * c, h, w).to(seq.device)
